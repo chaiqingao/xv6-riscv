@@ -29,6 +29,37 @@ trapinithart(void)
   w_stvec((uint64)kernelvec);
 }
 
+extern pte_t* walk(pagetable_t, uint64, int);
+
+//handle page fault
+int page_fault_handle(pagetable_t old,uint64 fault_address){
+  fault_address=PGROUNDDOWN(fault_address);
+  if(fault_address>=MAXVA) return -1;
+  uint flags;
+  pte_t *pte;
+  uint64 pa;
+  char *mem;    //分配新的内存
+  if((pte = walk(old, fault_address, 0)) == 0) return -1;
+  if((*pte & PTE_V) == 0) return -1;
+  pa = PTE2PA(*pte);
+  if(pa==0) return -1;
+  flags = PTE_FLAGS(*pte);
+  if(flags&PTE_COW){   //只处理COW页面
+    flags=(flags|PTE_W)&~ PTE_COW;   //可写, //去掉PTE_COW的设置
+    if((mem = kalloc()) == 0) return -1;
+    //copy the old page to the new page
+    memmove(mem, (char*)pa, PGSIZE);
+    //uninstall the old page
+    uvmunmap(old,fault_address,1,1);
+    
+    //install the new page in the PTE whith PTE_W set
+    if(mappages(old, fault_address, PGSIZE, (uint64)mem, flags) != 0){
+      kfree(mem);
+      return -1;
+    }
+  }
+  return 0;
+}
 //
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
@@ -67,6 +98,17 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if(r_scause()==15){
+    // printf("usertrap():in page fault\n");
+    //出错的page地址
+    pagetable_t old=p->pagetable;   //原始页表
+    uint64 fault_address=r_stval();   //触发page fault的虚拟地址
+    if(fault_address>=p->sz) p->killed=1;  //超过给进程分配的内存
+    //将虚拟地址转化到物理地址
+    else if(page_fault_handle(old,fault_address)!=0){
+      p->killed=1;
+      // exit(-1);
+    }
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());

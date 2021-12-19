@@ -23,6 +23,7 @@ struct {
   struct run *freelist;
 } kmem;
 
+int pm_count[(PHYSTOP - KERNBASE)/PGSIZE];
 void
 kinit()
 {
@@ -51,6 +52,11 @@ kfree(void *pa)
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
 
+  if(pm_count[COW_INDEX(pa)]>1){
+    pm_count[COW_INDEX(pa)]--;
+     return ;
+  }
+  pm_count[COW_INDEX(pa)]=0;
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
 
@@ -72,8 +78,11 @@ kalloc(void)
 
   acquire(&kmem.lock);
   r = kmem.freelist;
-  if(r)
+  if(r){
     kmem.freelist = r->next;
+    pm_count[COW_INDEX(r)]=1;
+  }
+    
   release(&kmem.lock);
 
   if(r)
