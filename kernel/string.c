@@ -105,3 +105,25 @@ strlen(const char *s)
   return n;
 }
 
+char *itoa(int i, char *s)
+{
+  char *p = s;
+  if (i < 0)
+  {
+    *p++ = '-';
+    i *= -1;
+  }
+  int tmp = i;
+  do
+  {
+    ++p;
+    tmp = tmp / 10;
+  } while (tmp);
+  *p = '\0';
+  do
+  {
+    *--p = '0' + (i % 10);
+    i = i / 10;
+  } while (i);
+  return s;
+}

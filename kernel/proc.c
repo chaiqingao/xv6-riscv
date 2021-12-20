@@ -134,7 +134,19 @@ found:
     release(&p->lock);
     return 0;
   }
-
+  
+  // alloc memory queue
+  if(alloc_mem_queue(&p->m_queue) < 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+  // alloc swap table
+  if(alloc_swap_table(&p->s_table) < 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
@@ -164,6 +176,8 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  dealloc_mem_queue(&p->m_queue);
+  dealloc_swap_table(&p->s_table);
 }
 
 // Create a user page table for a given process,
@@ -352,6 +366,9 @@ exit(int status)
       p->ofile[fd] = 0;
     }
   }
+
+  if (delete_swap_file(p) < 0)
+    panic("delete swap file failure!\n");
 
   begin_op();
   iput(p->cwd);

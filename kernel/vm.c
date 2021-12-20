@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -178,7 +180,7 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       panic("uvmunmap: not mapped");
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
-    if(do_free){
+    if(do_free && (*pte & PTE_O) == 0){
       uint64 pa = PTE2PA(*pte);
       kfree((void*)pa);
     }
@@ -225,9 +227,30 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
 
   if(newsz < oldsz)
     return oldsz;
-
+  struct proc* p = myproc();
   oldsz = PGROUNDUP(oldsz);
   for(a = oldsz; a < newsz; a += PGSIZE){
+    if (p->m_queue.tail->next == p->m_queue.head)
+    { // 已超出内存限制，调出一页
+      int pos;
+      struct swap_entry *s_entry = get_empty_swap_entry(&(p->s_table), &pos);
+      int file_id = pos / SWAP_FILE_PAGE;
+      int offset = pos % SWAP_FILE_PAGE * PGSIZE;
+      if(file_id>=SWAP_FILE_NUM)
+        panic("No more file!\n");
+      struct mem_entry *m_entry = pop_mem_queue(&(p->m_queue));
+      int buffer_size = PGSIZE/4;
+      for(int i=0;i<PGSIZE;i+=buffer_size)
+      {
+        if(write_swap_file(p, file_id, offset+i, PTE2PA(*(m_entry->pte))+i,buffer_size)<0)
+          panic("write swap file\n");
+      }
+      *(m_entry->pte) &= ~PTE_R;
+      *(m_entry->pte) |= PTE_O;
+      s_entry->pte = m_entry->pte;
+      kfree((void *)PTE2PA(*(m_entry->pte)));
+      m_entry->pte = 0;
+    }
     mem = kalloc();
     if(mem == 0){
       uvmdealloc(pagetable, a, oldsz);
@@ -239,6 +262,7 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
       uvmdealloc(pagetable, a, oldsz);
       return 0;
     }
+    push_mem_queue(&(p->m_queue),walk(pagetable,a,0));
   }
   return newsz;
 }
@@ -431,4 +455,46 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+int
+pagefault(pagetable_t pagetable, uint64 va)
+{
+  pte_t* pte = walk(pagetable, va, 0);
+  //printf("[PAGE FAULT] va=%p pte=%p\n",va,*pte);
+  struct proc* p = myproc();
+  if(!(*pte & PTE_V) || !(*pte & PTE_O))
+    return -1;
+  
+  struct mem_entry* m_entry = pop_mem_queue(&p->m_queue);
+  pte_t* pte_out = m_entry->pte;
+  m_entry->pte = 0;
+  int pos;
+  struct swap_entry* s_entry = get_pte_swap_entry(&p->s_table, pte, &pos);
+  //printf("[GET_PTE] pos = %d\n",pos);
+  *pte_out &= ~PTE_R;
+  *pte_out |= PTE_O;
+  *pte|=PTE_R;
+  *pte &= ~PTE_O;
+  s_entry->pte = pte_out;
+  int file_id = pos / SWAP_FILE_PAGE;
+  if(file_id >= SWAP_FILE_NUM)
+    return -1;
+  int offset = pos % SWAP_FILE_PAGE * PGSIZE;
+  uint64 pa = PTE2PA(*pte_out);
+  *pte_out = PA2PTE(PTE2PA(*pte)) | PTE_FLAGS(*pte_out);
+  *pte = PA2PTE(pa) | PTE_FLAGS(*pte);
+  push_mem_queue(&(p->m_queue),pte);
+  int buffer_size = PGSIZE/4;
+  char buffer[buffer_size];
+  for(int i=0;i<PGSIZE;i+=buffer_size)
+  {
+    memmove((void*)buffer,(void*)pa+i,buffer_size);
+    if(read_swap_file(p,file_id,offset+i,pa+i,buffer_size)<0)
+      panic("read swap file\n");
+    if(write_swap_file(p,file_id,offset+i,(uint64)buffer, buffer_size)<0)
+      panic("write swap file\n");
+  }
+  //printf("[PAGE FAULT OK] pte=%p pte_out=%p\n",*pte,*pte_out);
+  return 0;
 }

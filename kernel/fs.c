@@ -387,7 +387,7 @@ bmap(struct inode *ip, uint bn)
   }
   bn -= NDIRECT;
 
-  if(bn < NINDIRECT){
+  if(bn < NINDIRECT_1){
     // Load indirect block, allocating if necessary.
     if((addr = ip->addrs[NDIRECT]) == 0)
       ip->addrs[NDIRECT] = addr = balloc(ip->dev);
@@ -401,6 +401,33 @@ bmap(struct inode *ip, uint bn)
     return addr;
   }
 
+  bn -= NINDIRECT_1;
+
+  if(bn < NINDIRECT_2){
+    // Load second-level indirect block, allocating if necessary.
+    if((addr = ip->addrs[NDIRECT+1]) == 0)
+      ip->addrs[NDIRECT+1] = addr = balloc(ip->dev);
+    bp = bread(ip->dev, addr);
+    a = (uint*)bp->data;
+    uint bn_1= ( bn & 0xff00)>>8 ;
+    uint bn_2= bn & 0xff;
+    // printf("bn1:%d,bn2:%d\n",bn_1,bn_2);
+    if((addr = a[bn_1]) == 0){
+      a[bn_1] = addr = balloc(ip->dev);
+      log_write(bp);
+    }
+    brelse(bp);
+ 
+    bp = bread(ip->dev, addr);
+    a = (uint*)bp->data;
+    if((addr = a[bn_2]) == 0){
+      a[bn_2] = addr = balloc(ip->dev);
+      log_write(bp);
+    }
+    brelse(bp);
+
+    return addr;
+  }
   panic("bmap: out of range");
 }
 
@@ -409,9 +436,11 @@ bmap(struct inode *ip, uint bn)
 void
 itrunc(struct inode *ip)
 {
-  int i, j;
+  int i, j, k;
   struct buf *bp;
+  struct buf *bp2;
   uint *a;
+  uint *a2;
 
   for(i = 0; i < NDIRECT; i++){
     if(ip->addrs[i]){
@@ -419,11 +448,11 @@ itrunc(struct inode *ip)
       ip->addrs[i] = 0;
     }
   }
-
+   
   if(ip->addrs[NDIRECT]){
     bp = bread(ip->dev, ip->addrs[NDIRECT]);
     a = (uint*)bp->data;
-    for(j = 0; j < NINDIRECT; j++){
+    for(j = 0; j < NINDIRECT_1; j++){
       if(a[j])
         bfree(ip->dev, a[j]);
     }
@@ -432,6 +461,27 @@ itrunc(struct inode *ip)
     ip->addrs[NDIRECT] = 0;
   }
 
+
+  if(ip->addrs[NDIRECT+1]){
+    bp = bread(ip->dev, ip->addrs[NDIRECT+1]);
+    a = (uint*)bp->data;
+    for(j = 0; j < NINDIRECT_1; j++){
+      if(a[j])
+      {
+	bp2 = bread(ip->dev, a[j]);
+        a2 = (uint*)bp2->data;  
+        for(k=0 ;k < NINDIRECT_1 ;k++)
+	{
+	   if(a2[k]) bfree(ip->dev,a2[k]);
+	}	
+	brelse(bp2);
+        bfree(ip->dev, a[j]);
+      }
+    }
+    brelse(bp);
+    bfree(ip->dev, ip->addrs[NDIRECT+1]);
+    ip->addrs[NDIRECT+1] = 0;
+  }
   ip->size = 0;
   iupdate(ip);
 }
@@ -671,4 +721,67 @@ struct inode*
 nameiparent(char *path, char *name)
 {
   return namex(path, 1, name);
+}
+
+
+void init_swap_file(struct proc* p)
+{
+  for(int i=0;i<SWAP_FILE_NUM;i++)
+  {
+    // file path
+    char path[20];
+    memmove(path,"./.swap",7);
+    itoa(p->pid,path+7);
+    memmove(path+strlen(path),"_",2);
+    itoa(i,path+strlen(path));
+
+    printf("%s\n",path);
+
+    begin_op();
+    struct inode* in = create(path, T_FILE, 0, 0);
+    printf("create ok\n");
+    iunlock(in);
+    if((p->swap_files[i] = filealloc()) == 0)
+    {
+      panic("init swap file failure!\n");
+    }
+    p->swap_files[i]->ip = in;
+    p->swap_files[i]->type = FD_INODE;
+    p->swap_files[i]->off = 0;
+    p->swap_files[i]->readable = 1;
+    p->swap_files[i]->writable = 1;
+    end_op();
+  }
+}
+
+int delete_swap_file(struct proc *p)
+{
+  for(int i=0;i<SWAP_FILE_NUM;i++)
+  {
+    // file path
+    char path[20];
+    memmove(path,"./.swap",7);
+    itoa(p->pid,path+7);
+    memmove(path+strlen(path),"_",2);
+    itoa(i,path+strlen(path));
+    // close file
+    if(p->swap_files[i] != 0)
+      fileclose(p->swap_files[i]);
+    // unlink
+    if(unlink(path) < 0)
+      return -1;
+  }
+  return 0;
+}
+
+int read_swap_file(struct proc *p, int file_id, int offset, uint64 addr, int size)
+{
+  p->swap_files[file_id]->off = offset;
+  return sfileread(p->swap_files[file_id],addr,size);
+}
+
+int write_swap_file(struct proc *p, int file_id, int offset, uint64 addr, int size)
+{
+  p->swap_files[file_id]->off = offset;
+  return sfilewrite(p->swap_files[file_id],addr,size);
 }

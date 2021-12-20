@@ -8,6 +8,8 @@ struct spinlock;
 struct sleeplock;
 struct stat;
 struct superblock;
+struct mem_queue;
+struct swap_table;
 
 // bio.c
 void            binit(void);
@@ -33,6 +35,8 @@ void            fileinit(void);
 int             fileread(struct file*, uint64, int n);
 int             filestat(struct file*, uint64 addr);
 int             filewrite(struct file*, uint64, int n);
+int             sfileread(struct file*, uint64, int n);
+int             sfilewrite(struct file*, uint64, int n);
 
 // fs.c
 void            fsinit(int);
@@ -53,6 +57,10 @@ int             readi(struct inode*, int, uint64, uint, uint);
 void            stati(struct inode*, struct stat*);
 int             writei(struct inode*, int, uint64, uint, uint);
 void            itrunc(struct inode*);
+void            init_swap_file(struct proc*);
+int             delete_swap_file(struct proc*);
+int             read_swap_file(struct proc*, int, int, uint64, int);
+int             write_swap_file(struct proc*, int, int, uint64, int);
 
 // ramdisk.c
 void            ramdiskinit(void);
@@ -80,6 +88,7 @@ int             pipewrite(struct pipe*, uint64, int);
 void            printf(char*, ...);
 void            panic(char*) __attribute__((noreturn));
 void            printfinit(void);
+void            backtrace(void);
 
 // proc.c
 int             cpuid(void);
@@ -130,6 +139,7 @@ char*           safestrcpy(char*, const char*, int);
 int             strlen(const char*);
 int             strncmp(const char*, const char*, uint);
 char*           strncpy(char*, const char*, int);
+char*           itoa(int, char*);
 
 // syscall.c
 int             argint(int, int*);
@@ -138,6 +148,10 @@ int             argaddr(int, uint64 *);
 int             fetchstr(uint64, char*, int);
 int             fetchaddr(uint64, uint64*);
 void            syscall();
+
+// sysfile.c
+struct inode*  create(char*, short, short, short);
+int            unlink(char* path);
 
 // trap.c
 extern uint     ticks;
@@ -170,6 +184,18 @@ uint64          walkaddr(pagetable_t, uint64);
 int             copyout(pagetable_t, uint64, char *, uint64);
 int             copyin(pagetable_t, char *, uint64, uint64);
 int             copyinstr(pagetable_t, char *, uint64, uint64);
+int             pagefault(pagetable_t, uint64);
+
+// memswap.c
+int                alloc_mem_queue(struct mem_queue*);
+void               dealloc_mem_queue(struct mem_queue*);
+int                alloc_swap_table(struct swap_table*);
+void               dealloc_swap_table(struct swap_table*);
+void               swap_mem_and_file(pte_t*, pte_t*);
+struct mem_entry*  pop_mem_queue(struct mem_queue*);
+void               push_mem_queue(struct mem_queue*, pte_t*);
+struct swap_entry* get_empty_swap_entry(struct swap_table*, int*);
+struct swap_entry* get_pte_swap_entry(struct swap_table*, pte_t*, int*);
 
 // plic.c
 void            plicinit(void);

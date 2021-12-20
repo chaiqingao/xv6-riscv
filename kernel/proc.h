@@ -1,4 +1,5 @@
 // Saved registers for kernel context switches.
+#include "memswap.h"
 struct context {
   uint64 ra;
   uint64 sp;
@@ -104,5 +105,8 @@ struct proc {
   struct context context;      // swtch() here to run process
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
+  struct mem_queue m_queue;    // memory queue
+  struct swap_table s_table;   // swap file table
+  struct file* swap_files[SWAP_FILE_NUM];  // swap file
   char name[16];               // Process name (debugging)
 };
